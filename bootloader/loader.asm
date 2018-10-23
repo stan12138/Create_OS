@@ -1,51 +1,55 @@
-org 0x7c00
+mov ax, 0x1140
+mov ds, ax
 
-jmp start
-nop
-BS_OEMName	db	'StanBoot'
-BPB_BytesPerSec	dw	512
-BPB_SecPerClus	db	1
-BPB_RsvdSecCnt	dw	1
-BPB_NumFATs	db	2
-BPB_RootEntCnt	dw	224
-BPB_TotSec16	dw	2880
-BPB_Media	db	0xf0
-BPB_FATSz16	dw	9
-BPB_SecPerTrk	dw	18
-BPB_NumHeads	dw	2
-BPB_HiddSec	dd	0
-BPB_TotSec32	dd	0
-BS_DrvNum	db	0
-BS_Reserved1	db	0
-BS_BootSig	db	0x29
-BS_VolID	dd	0
-BS_VolLab	db	'boot loader'
-BS_FileSysType	db	'FAT12   '
+;下面显示一些提示信息
+mov	ax,	0600h
+mov	bx,	0700h
+mov	cx,	0
+mov	dx,	0184fh
+int 10h
 
-start :
-	mov ax, 0600h
-	mov	bx,	2000h
-	mov	cx,	0500h
-	mov	dx,	0a0ah
-	int 10h
+mov ax, 0200h
+mov dx, 0000h
+mov bx, 0000h
+int 10h
 
-	mov ax, 0200h
-	mov dx, 0000h
-	mov bx, 0000h
-	int 10h
+mov ax, 1301h
+mov dx, 0000h
+mov cx, [len]
+mov bx, 1140h
+mov es, bx
+mov bp, mess
+mov bx, 0082h
+int 10h
 
-	mov ax, 1301h
-	mov dx, 0000h
-	mov cx, [len]
-	mov bx, 0000h
-	mov es, bx
-	mov bp, mess
-	mov bx, 0082h
-	int 10h
+xor ah, ah
+xor dl, dl
+int 13h
 
-	xor ah, ah
-	xor dl, dl
-	int 13h
+
+;下面开始进入保护模式，并开启big real mode
+in	al,	92h
+or	al,	00000010b
+out	92h,	al
+
+cli
+
+db	0x66
+lgdt	[gdtptr]	
+
+mov	eax,	cr0
+or	eax,	1
+mov	cr0,	eax
+
+mov	ax,	data_gdt_selector
+mov	fs,	ax
+mov	eax,	cr0
+and	al,	11111110b
+mov	cr0,	eax
+
+sti
+
+
 
 
 search_file_in_dir:
@@ -66,9 +70,32 @@ load_one_dir_sector:
 
 call search_dir_sector         ;扇区读入结束，开始搜寻扇区
 
+mov edi, 0x100000
+
 call handle_fat_load_file
 
-call to_loader
+call load_kernel_success
+
+
+func_read_disk:          
+	mov bl, 18      ;每个柱面18个扇区
+	div bl          ;ax/bl
+	mov dh, al      ;以下其实就是套公式
+	and dh, 1
+	shr al, 1
+	mov ch, al
+	inc ah
+	mov al, cl
+	mov cl, ah
+begin_read:
+	mov ah, 02h
+	mov bx, si   ;设置数据存储区为0x10000-->es:bx
+	mov es, bx
+	mov bx, 0
+	mov dl, 0    ;千万注意，不能少了这一行，我被坑了一天
+	int 13h
+	jc begin_read
+	ret
 
 
 
@@ -109,14 +136,13 @@ find_file_fail:
 	mov ax, 1301h
 	mov cx, [f_len]
 	mov dx, 0200h
-	mov bx, 0
+	mov bx, 0x1140
 	mov es, bx
 	mov bp, fail_mess
 	mov bx, 0084h
 	int 10h
 
 	jmp $
-
 
 handle_fat_load_file:
 	mov ax, 1                  ;开始处理fat表，fat表开始于序号为1的扇区
@@ -126,10 +152,7 @@ handle_fat_load_file:
 	;读完之后，数据依旧存在0x1000:0x0000内存单元中，因此es寄存器要保护，bx寄存器也许是可以使用的，但是最好别乱搞
 	;另外，di寄存器存储了首簇序号
 
-parse_fat:
-	mov word [fat_sec_order], 0
 	mov ax, [first_sector_number]                ;首簇序号存于ax寄存器中，但是ax寄存器在func_read_disk之后会被修改，所以必须备份，si也要用，只能备份在di中
-	mov si, 1140h
 
 	jmp get_loader_sector
 
@@ -139,13 +162,16 @@ get_loader_sector:
 
 	mov cl, 1       ;读取一个扇区
 	add ax, 31      ;数据区的簇序号从2开始，2号簇对应的是序号是33的扇区
+	mov si, 0x7c0
 	call func_read_disk
-	add si, 20h
+
+	call move_sector_to_des
 
 	mov ax, [first_sector_number]    ;将首簇序号恢复到ax寄存器
 
 	mov cl, 2
 	div cl
+	
 	cmp ah, 0
 	jz even_num
 	jmp odd_num
@@ -158,6 +184,7 @@ odd_num:
 	mov word [odd_flage], 1
 
 	jmp get_next_num
+
 
 get_next_num:
 	mov cl, 3
@@ -201,46 +228,54 @@ get_odd_fat:
 	mov [first_sector_number], ax
 	jmp get_loader_sector
 
+
+
+
 file_load_done:
 	ret
 
-to_loader:
-	jmp 0x1140:0x00
 
-
-;func_read_disk和begin_read是读入扇区的函数，可以接受三个参数，ax扇区序号，cl扇区数目，si指定扇区存储位置的段地址
-;偏移地址都从0开始
-
-;磁盘读取功能一共要使用ax, bx, cx, dx, si, es这些寄存器,开始执行之前ax, cl, si三个寄存器需要存入参数，其他寄存器
-;无所谓，执行结束之后，es,bx指向了内容存储位置，其余寄存器均可修改
-
-func_read_disk:          
-	mov bl, 18      ;每个柱面18个扇区
-	div bl          ;ax/bl
-	mov dh, al      ;以下其实就是套公式
-	and dh, 1
-	shr al, 1
-	mov ch, al
-	inc ah
-	mov al, cl
-	mov cl, ah
-begin_read:
-	mov ah, 02h
-	mov bx, si   ;设置数据存储区为0x10000-->es:bx
-	mov es, bx
+move_sector_to_des:
+	mov cx, 0x7c0
+	mov gs, cx
+	mov cx, 200h
 	mov bx, 0
-	mov dl, 0    ;千万注意，不能少了这一行，我被坑了一天
-	int 13h
-	jc begin_read
+
+move_loop:
+	mov al, byte [gs:bx]
+	mov byte [fs:edi], al
+
+	inc bx
+	inc edi
+
+	loop move_loop
+
 	ret
 
 
-mess: db "hello, stan!"
+load_kernel_success:
+	mov ax, 1301h
+	mov dx, 0200h
+	mov cx, [len_mess2]
+	mov bx, 1140h
+	mov es, bx
+	mov bp, mess2
+	mov bx, 0082h
+	int 10h	
+
+	jmp $
+
+
+
+
+mess: db "hello, welcome to loader!"
 len: dw $-mess
-fail_mess: db "can not find loa"
+mess2: db "kernel load done...."
+len_mess2: dw $-mess2
+fail_mess: db "can not find kernel"
 f_len: dw $-fail_mess
 
-file_name: db "LOADER  BIN", 0
+file_name: db "KERNEL  BIN", 0
 
 first_sector_number: dw 0
 
@@ -250,11 +285,21 @@ dir_num: dw 14
 entry_num: dw 16
 entry_order: dw 0
 
-fat_sec_order: dw 0
 
 odd_flage: dw 0
 
 name_len: dw 11
 
-times 510-($-$$) db 0
-dw 0xaa55	
+
+section gdt
+
+first_gdt:		dd	0,0
+code_gdt:	dd	0x0000FFFF,0x00CF9A00
+data_gdt:	dd	0x0000FFFF,0x00CF9200
+
+gdtlen	equ	$ - first_gdt
+gdtptr	dw	gdtlen - 1
+	dd	first_gdt+0x11400
+
+code_gdt_selector	equ	code_gdt - first_gdt
+data_gdt_selector	equ	data_gdt - first_gdt
