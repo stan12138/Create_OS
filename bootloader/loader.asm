@@ -1,3 +1,4 @@
+
 mov ax, 0x1140
 mov ds, ax
 
@@ -19,7 +20,7 @@ mov cx, [len]
 mov bx, 1140h
 mov es, bx
 mov bp, mess
-mov bx, 0082h
+mov bx, 0002h
 int 10h
 
 xor ah, ah
@@ -35,7 +36,7 @@ out	92h,	al
 cli
 
 db	0x66
-lgdt	[gdtptr]	
+lgdt	[gdtptr]
 
 mov	eax,	cr0
 or	eax,	1
@@ -75,6 +76,8 @@ mov edi, 0x100000
 call handle_fat_load_file
 
 call load_kernel_success
+
+jmp kill_motor
 
 
 func_read_disk:          
@@ -139,7 +142,7 @@ find_file_fail:
 	mov bx, 0x1140
 	mov es, bx
 	mov bp, fail_mess
-	mov bx, 0084h
+	mov bx, 0004h
 	int 10h
 
 	jmp $
@@ -260,13 +263,240 @@ load_kernel_success:
 	mov bx, 1140h
 	mov es, bx
 	mov bp, mess2
-	mov bx, 0082h
+	mov bx, 0002h
 	int 10h	
+
+	mov ax, 0b800h
+	mov gs, ax
+	mov ah, 0fh
+	mov al, 'S'
+	mov [gs:((80+39)*2)], ax
+
+	ret
+
+
+kill_motor:
+	mov dx, 03f2h
+	mov al, 0
+	out dx, al
+
+show_some_message1:
+	mov ax, 1301h
+	mov dx, 0300h
+	mov cx, [memory_mess_len]
+	mov bx, 1140h
+	mov es, bx
+	mov bp, memory_mess
+	mov bx, 0002h
+	int 10h
+
+mov ebx, 0
+mov ax, 0
+mov es, ax
+mov di, 0x7e00
+
+get_memory_info:
+	mov eax, 0xe820
+	mov ecx, 20
+	mov edx, 0x534d4150
+	int 15h
+	jc get_memory_info_fail
+	add di, 20
+
+	cmp ebx, 0
+	jne get_memory_info
+	jmp get_memory_info_done
+
+
+
+get_memory_info_fail:
+
+	mov ax, 0x1140
+	mov ds, ax
+
+
+	mov ax, 1301h
+	mov dx, 0400h
+	mov cx, [memory_fail_mess_len]
+	mov bx, 1140h
+	mov es, bx
+	mov bp, memory_fail_mess
+	mov bx, 0004h
+	int 10h
 
 	jmp $
 
+get_memory_info_done:
+
+	mov ax, 0x1140
+	mov ds, ax
+
+	mov ax, 1301h
+	mov dx, 0400h
+	mov cx, [memory_ok_mess_len]
+	mov bx, 1140h
+	mov es, bx
+	mov bp, memory_ok_mess
+	mov bx, 0002h
+	int 10h
 
 
+get_vbe_controler_info:
+	mov ax, 0
+	mov es, ax
+	mov di, 8000h
+	mov ax, 4f00h
+	int 10h
+
+	cmp ax, 004fh
+	jz get_vbe_controler_info_success
+
+get_vbe_controler_info_fail:
+	mov ax, 0x1140
+	mov ds, ax
+
+
+	mov ax, 1301h
+	mov dx, 0500h
+	mov cx, [vbe_control_fail_len]
+	mov bx, 1140h
+	mov es, bx
+	mov bp, vbe_control_fail
+	mov bx, 0004h
+	int 10h
+
+	jmp $	
+
+get_vbe_controler_info_success:
+	mov ax, 0x1140
+	mov ds, ax
+
+
+	mov ax, 1301h
+	mov dx, 0500h
+	mov cx, [vbe_control_ok_len]
+	mov bx, 1140h
+	mov es, bx
+	mov bp, vbe_control_ok
+	mov bx, 0002h
+	int 10h
+
+
+set_vbe_mode:
+	mov ax, 4f02h
+	mov bx, 0x4143
+	int 10h
+
+	cmp ax, 004fh
+	jnz set_vbe_mode_fail
+
+	jmp back_to_protect_mode
+
+
+set_vbe_mode_fail:
+	mov ax, 0x1140
+	mov ds, ax
+
+
+	mov ax, 1301h
+	mov dx, 0600h
+	mov cx, [vbe_mode_fail_len]
+	mov bx, 1140h
+	mov es, bx
+	mov bp, vbe_mode_fail
+	mov bx, 0004h
+	int 10h
+
+	jmp $	
+
+
+back_to_protect_mode:
+	cli
+	mov ax, 0x1140
+	mov ds, ax
+
+	db	0x66
+	lgdt [gdtptr]
+
+	mov eax, cr0
+	or eax, 1
+	mov cr0, eax
+
+	jmp dword code_gdt_selector:get_in_protect+0x11400
+	;事实证明这个语法是可以使用的
+
+section s32
+bits 32
+
+get_in_protect:
+
+	mov ax, data_gdt_selector
+	mov ds, ax
+	mov es, ax
+	mov fs, ax
+	mov ss, ax
+	mov esp, 7e00h
+
+	mov	dword	[0x90000],	0x91007
+	mov	dword	[0x90800],	0x91007		
+
+	mov	dword	[0x91000],	0x92007
+
+	mov	dword	[0x92000],	0x000083
+
+	mov	dword	[0x92008],	0x200083
+
+	mov	dword	[0x92010],	0x400083
+
+	mov	dword	[0x92018],	0x600083
+
+	mov	dword	[0x92020],	0x800083
+
+	mov	dword	[0x92028],	0xa00083
+
+	mov eax, gdtptr64
+
+
+	lgdt	[gdtptr64+0x11400]
+	mov	ax,	0x10
+	mov	ds,	ax
+	mov	es,	ax
+	mov	fs,	ax
+	mov	gs,	ax
+	mov	ss,	ax
+
+	mov	esp,	7E00h
+
+;=======	open PAE
+
+	mov	eax,	cr4
+	bts	eax,	5
+	mov	cr4,	eax
+
+;=======	load	cr3
+
+	mov	eax,	0x90000
+	mov	cr3,	eax
+
+;=======	enable long-mode
+
+	mov	ecx,	0C0000080h		;IA32_EFER
+	rdmsr
+
+	bts	eax,	8
+	wrmsr
+
+;=======	open PE and paging
+
+	mov	eax,	cr0
+	bts	eax,	0
+	bts	eax,	31
+	mov	cr0,	eax
+
+	jmp	code_gdt_selector64:0x100000
+
+
+section mess_data
 
 mess: db "hello, welcome to loader!"
 len: dw $-mess
@@ -274,6 +504,26 @@ mess2: db "kernel load done...."
 len_mess2: dw $-mess2
 fail_mess: db "can not find kernel"
 f_len: dw $-fail_mess
+
+
+memory_mess: db "motor already kill, now begin get memory info...."
+memory_mess_len: dw $-memory_mess
+
+memory_fail_mess: db "get memory info fail, will dead in here...."
+memory_fail_mess_len: dw $-memory_fail_mess
+
+memory_ok_mess: db "get memory info ok...."
+memory_ok_mess_len: dw $-memory_ok_mess
+
+vbe_control_fail: db "get vbe controler info fail, will dead in here..."
+vbe_control_fail_len: dw $-vbe_control_fail
+
+vbe_control_ok: db "get vbe controler info success, will go to get vbe mode info..."
+vbe_control_ok_len: dw $-vbe_control_ok
+
+vbe_mode_fail: db "set vbe mode fail, going to dead here..."
+vbe_mode_fail_len: dw $-vbe_mode_fail
+
 
 file_name: db "KERNEL  BIN", 0
 
@@ -291,7 +541,7 @@ odd_flage: dw 0
 name_len: dw 11
 
 
-section gdt
+section gdt32
 
 first_gdt:		dd	0,0
 code_gdt:	dd	0x0000FFFF,0x00CF9A00
@@ -303,3 +553,17 @@ gdtptr	dw	gdtlen - 1
 
 code_gdt_selector	equ	code_gdt - first_gdt
 data_gdt_selector	equ	data_gdt - first_gdt
+
+
+section gdt64
+
+first_gdt64: dq	0x0000000000000000
+code_gdt64:	 dq	0xff2098ffffff0000
+data_gdt64:	 dq	0xff0092ffffff0000
+
+gdtlen64	equ	$ - first_gdt64
+gdtptr64	dw	gdtlen64 - 1
+		dd	first_gdt64+0x11400
+
+code_gdt_selector64	equ	code_gdt64 - first_gdt64
+data_gdt_selector64	equ	data_gdt64 - first_gdt64
