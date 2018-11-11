@@ -32,7 +32,6 @@ SECTIONS
 	{
 		_data = .;
 		*(.data)
-		*(.rdata)
 		_edata = .;
 	}
 	.bss :
