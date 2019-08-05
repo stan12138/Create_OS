@@ -1,0 +1,17 @@
+megs:256
+
+romimage:file=$BXSHARE/BIOS-bochs-latest
+vgaromimage:file=$BXSHARE/VGABIOS-lgpl-latest
+
+floppya:1_44=../img/a.img,status=inserted
+
+boot:floppy
+
+
+mouse:enabled=0
+
+keyboard: keymap=$BXSHARE/keymaps/x11-pc-de.map
+
+
+
+log:../log/bochsout.txt

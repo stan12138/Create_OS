@@ -170,8 +170,11 @@ class FAT12 :
 		"""
 		给出要写入的文件的名字和首簇号，文件长度，自动写入目录
 		"""
-		name = filename[:filename.index(".")].upper().encode("ascii")
-		suffix = filename[filename.index(".")+1:].upper().encode("ascii")
+		reverse_filename = filename[-1::-1]
+		pos_point = -1*reverse_filename.index(".") 
+		pos_slash = -1*reverse_filename.index("/")
+		name = filename[pos_slash:pos_point-1].upper().encode("ascii")
+		suffix = filename[pos_point:].upper().encode("ascii")
 
 		if len(name)>8 or len(suffix)>3 :
 			print("file name too long")

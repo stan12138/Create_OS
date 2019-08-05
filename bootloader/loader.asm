@@ -1,4 +1,3 @@
-
 mov ax, 0x1140
 mov ds, ax
 
@@ -8,11 +7,13 @@ mov	bx,	0700h
 mov	cx,	0
 mov	dx,	0184fh
 int 10h
+; 清屏
 
 mov ax, 0200h
 mov dx, 0000h
 mov bx, 0000h
 int 10h
+; 设置光标位置
 
 mov ax, 1301h
 mov dx, 0000h
@@ -22,32 +23,38 @@ mov es, bx
 mov bp, mess
 mov bx, 0002h
 int 10h
+; 输出信息
 
 xor ah, ah
 xor dl, dl
 int 13h
+; 重置磁盘驱动器
 
 
-;下面开始进入保护模式，并开启big real mode
+;开启big real mode
 in	al,	92h
 or	al,	00000010b
 out	92h,	al
+; 使用A20快速门开启A20地址线
 
-cli
+cli    ;暂时关闭中断
 
-db	0x66
 lgdt	[gdtptr]
+; 加载GDTR的值进入gdtr
 
 mov	eax,	cr0
 or	eax,	1
 mov	cr0,	eax
+; 设置CR0，开启保护模式
 
 mov	ax,	data_gdt_selector
 mov	fs,	ax
+; 加载数据段选择子进入fs段寄存器
+
 mov	eax,	cr0
 and	al,	11111110b
 mov	cr0,	eax
-
+; 关闭CR0  big real mode开启成功
 sti
 
 

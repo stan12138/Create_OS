@@ -28,11 +28,13 @@ start :
 	mov	cx,	0500h
 	mov	dx,	0a0ah
 	int 10h
+	; 清屏5行0列到10行10列，颜色绿色，其实没啥用
 
 	mov ax, 0200h
 	mov dx, 0000h
 	mov bx, 0000h
 	int 10h
+	; 设置光标到0行0列
 
 	mov ax, 1301h
 	mov dx, 0000h
@@ -42,10 +44,12 @@ start :
 	mov bp, mess
 	mov bx, 0082h
 	int 10h
+	; 输出一行信息
 
 	xor ah, ah
 	xor dl, dl
 	int 13h
+	; 重置磁盘驱动器
 
 
 search_file_in_dir:
