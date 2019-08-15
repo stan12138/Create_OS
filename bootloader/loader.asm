@@ -1,29 +1,16 @@
 mov ax, 0x1140
 mov ds, ax
 
-;下面显示一些提示信息
-mov	ax,	0600h
-mov	bx,	0700h
-mov	cx,	0
-mov	dx,	0184fh
-int 10h
-; 清屏
+push 0000h
+push 0f0fh
+push 5000h
+call clean_screen
 
-mov ax, 0200h
-mov dx, 0000h
-mov bx, 0000h
-int 10h
-; 设置光标位置
-
-mov ax, 1301h
-mov dx, 0000h
-mov cx, [len]
-mov bx, 1140h
-mov es, bx
-mov bp, mess
-mov bx, 0002h
-int 10h
-; 输出信息
+push 0000h
+push word [len]
+push mess
+push 0200h
+call print
 
 xor ah, ah
 xor dl, dl
@@ -58,209 +45,321 @@ mov	cr0,	eax
 sti
 
 
-
-
-search_file_in_dir:
-	mov word [dir_num], 14     ;根目录有14个扇区
-	mov word [dir_order], 19   ;根目录扇区序号从19开始
-
-
-load_one_dir_sector:
-	cmp word [dir_num],  0
-	jz find_file_fail        ;剩余扇区数等于0，说明搜索结束
-	dec word [dir_num]         ;剩余扇区数--
-	mov ax, [dir_order]        ;将要搜索的扇区序号存入ax
-	mov cl, 1                  ;将要载入的扇区数存入cl，感觉还应该加入一个存储地址功能
-	mov si, 1000h              ;si存储扇区应该读入到内存的段地址，偏移地址是0
-	inc word [dir_order]       ;扇区序号++
-	call func_read_disk           ;跳转，读入扇区
-
-
-call search_dir_sector         ;扇区读入结束，开始搜寻扇区
-
 mov edi, 0x100000
-
-call handle_fat_load_file
-
+push edi
+push 1000h
+push file_name
+push 0x7c0
+call load_file_fat12
 call load_kernel_success
-
 jmp kill_motor
 
 
-func_read_disk:          
-	mov bl, 18      ;每个柱面18个扇区
-	div bl          ;ax/bl
-	mov dh, al      ;以下其实就是套公式
+clean_screen:
+; 函数原型：void clean_screen(word 左上(bp+8), word 右下(bp+6), word 颜色(bp+4))
+	push bp
+	mov bp, sp
+	pusha
+
+
+	mov ax, 0600h
+
+	mov bx, [ss:bp+4]   ;第三个参数
+	mov dx, [ss:bp+6]   ;第二个参数
+	mov cx, [ss:bp+8]   ;第一个参数
+
+	int 10h
+
+	mov ax, [ss:bp+2]   ;获取返回地址的位置 
+	mov [ss:bp+8], ax   ;将返回地址放入第一个参数所在的地方
+
+	popa
+	pop bp
+	add sp, 6        ;弹出参数
+
+	ret
+
+print: 
+; 函数原型: void print(word 光标位置(bp+10), word 字符串长度(bp+8), word 字符串地址(bp+6), word 文字颜色(bp+4))
+	push bp
+	mov bp, sp
+	pusha
+
+	mov ax, 1301h   ;输出
+	mov dx, [ss:bp+10]
+	mov cx, [ss:bp+8]
+
+	push es        ;如果在函数内部修改了段寄存器，必须要注意保存和恢复，popa，pusha与段寄存器无关
+
+	mov bx, ds
+	mov es, bx
+	mov bx, [ss:bp+4]
+	mov bh, 00h
+	push bp
+	mov bp, [ss:bp+6]
+	int 10h
+	pop bp
+
+	pop es
+
+	mov ax, [ss:bp+2]   ;获取返回地址的位置 
+	mov [ss:bp+10], ax  ;将返回地址放入第一个参数所在的地方
+	popa
+	pop bp
+	add sp, 8        ;弹出参数
+
+	ret
+
+load_sector:
+; 函数原型：void load_sector(word sector_index(bp+8), word sector_num(bp+6), word address(bp+4))
+	push bp
+	mov bp, sp
+	pusha
+
+	mov ax, [ss:bp+8]
+	mov cx, [ss:bp+6]
+	mov si, [ss:bp+4]
+	mov bl, 18
+	div bl
+	mov dh, al
 	and dh, 1
 	shr al, 1
+	
 	mov ch, al
 	inc ah
 	mov al, cl
 	mov cl, ah
-begin_read:
+	
+	push es
+
+	read:
 	mov ah, 02h
-	mov bx, si   ;设置数据存储区为0x10000-->es:bx
+	mov bx, si
 	mov es, bx
 	mov bx, 0
-	mov dl, 0    ;千万注意，不能少了这一行，我被坑了一天
+	mov dl, 0
 	int 13h
-	jc begin_read
+	jc read
+
+	pop es
+
+	mov ax, [ss:bp+2]   ;获取返回地址的位置 
+	mov [ss:bp+8], ax  ;将返回地址放入第一个参数所在的地方
+	popa
+	pop bp
+	add sp, 6        ;弹出参数
+
 	ret
 
 
 
-search_dir_sector:
-	mov word [entry_num], 16           ;每个根目录扇区包含16个目录项
-	mov word [entry_order], 0          ;第一个目录项的偏移为0
 
-search_entry:
-	cmp word [entry_num], 0            ;比较还剩余几个目录项未搜索
-	jz load_one_dir_sector                    ;本扇区搜索结束，搜索下一个扇区
-	dec word [entry_num]               ;剩余目录项--
-	mov bx, [entry_order]              ;将目录项偏移存入bx
-	add word [entry_order], 32         ;每个目录项32字节，生成下一个目录项的偏移
-	mov si, file_name                ;将要搜寻的文件名字存储的地址放进si
+move_sector:
+	; loader特别定制,  void move_sector(dword edi[bp+6], word gs[bp+4])
+	push bp
+	mov bp, sp
+	pusha
 
-	mov word [name_len], 11            ;每个目录项的文件名字和后缀共11字节
+	push gs
 
-cmp_name:
-	cmp word [name_len], 0             ;检查还剩几个字节未比对
-	jz find_file_success                         ;全部11个字节比对结束，搜寻成功，当前目录项就是目标
-	dec word [name_len]                ;剩余字节数减一
-	lodsb                              ;将一个名字的字节载入al寄存器
-	cmp al, byte [es:bx]               ;比对al寄存器的内容与es:bx指向的内存的内容
-	jz one_character_succ              ;比对成功，跳转
-	jmp search_entry                   ;比对失败，搜索下一个目录项
-
-one_character_succ:
-	inc bx                             ;比对成功，偏移加一，比对下一个字节
-	jmp cmp_name                       ;跳转进入比对流程
-
-find_file_success:
-	add bx, 15                 ;搜寻成功，bx加15得到首簇序号的偏移
-	mov di, [es:bx]            ;把首簇的序号存入di寄存器
-	mov [first_sector_number], di     ;首簇号要存在内存中
-	ret
-
-find_file_fail:
-	mov ax, 1301h
-	mov cx, [f_len]
-	mov dx, 0200h
-	mov bx, 0x1140
-	mov es, bx
-	mov bp, fail_mess
-	mov bx, 0004h
-	int 10h
-
-	jmp $
-
-handle_fat_load_file:
-	mov ax, 1                  ;开始处理fat表，fat表开始于序号为1的扇区
-	mov cl, 9                  ;一次性读入全部9个fat扇区
-	mov si, 1000h              ;读入到10000h处
-	call func_read_disk           ;开始读入fat扇区
-	;读完之后，数据依旧存在0x1000:0x0000内存单元中，因此es寄存器要保护，bx寄存器也许是可以使用的，但是最好别乱搞
-	;另外，di寄存器存储了首簇序号
-
-	mov ax, [first_sector_number]                ;首簇序号存于ax寄存器中，但是ax寄存器在func_read_disk之后会被修改，所以必须备份，si也要用，只能备份在di中
-
-	jmp get_loader_sector
-
-get_loader_sector:
-	cmp ax, 0fffh
-	jz file_load_done
-
-	mov cl, 1       ;读取一个扇区
-	add ax, 31      ;数据区的簇序号从2开始，2号簇对应的是序号是33的扇区
-	mov si, 0x7c0
-	call func_read_disk
-
-	call move_sector_to_des
-
-	mov ax, [first_sector_number]    ;将首簇序号恢复到ax寄存器
-
-	mov cl, 2
-	div cl
-	
-	cmp ah, 0
-	jz even_num
-	jmp odd_num
-
-even_num:
-	mov word [odd_flage], 0
-
-	jmp get_next_num
-odd_num:
-	mov word [odd_flage], 1
-
-	jmp get_next_num
-
-
-get_next_num:
-	mov cl, 3
-	mul cl   ;al寄存器存储除2之后的商，al寄存器刚好也是字节乘法的默认寄存器
-	;乘法的结果在ax寄存器，代表着要取得的fat表项的偏移
-	mov bx, 1000h
-	mov es, bx       ;读软盘之后，会修改es寄存器，需要恢复原样
-	mov bx, ax
-	mov al, [es:bx]  ;一共要取出3个字节，先取出一个字节。这里必须要注意大小端存储的问题，如果是取出两个字节的话
-	mov ah, 0        ;要让ax寄存器只存储第一个字节的内容
-	inc bx
-	mov cl, [es:bx]  ;取出第二个字节
-	and cl, 0fh
-	mov ch, 0
-	shl cx, 8        ;第二个字节的高四位左移8位加上第一个字节构成第一个表项
-	add ax, cx       ;得到第一个表项，存储在ax寄存器当中
-
-	mov cl, [es:bx]  ;再次取出第二个字节
-	mov ch, 0
-	shr cx, 4
-
-	inc bx
-	mov dl, [es:bx]  ;取出第三个字节
-	mov dh, 0
-	shl dx, 4
-	add cx, dx       ;取得第二个表项，存储于cx寄存器
-
-	;上述代码已经过debug，确认无误
-
-	cmp word [odd_flage], 0
-	jz get_even_fat
-	jmp get_odd_fat
-
-get_even_fat:
-	mov ax, ax
-	mov [first_sector_number], ax
-	jmp get_loader_sector
-
-get_odd_fat:
-	mov ax, cx
-	mov [first_sector_number], ax
-	jmp get_loader_sector
-
-
-
-
-file_load_done:
-	ret
-
-
-move_sector_to_des:
-	mov cx, 0x7c0
+	mov cx, [ss:bp+4]
 	mov gs, cx
 	mov cx, 200h
 	mov bx, 0
 
-move_loop:
-	mov al, byte [gs:bx]
-	mov byte [fs:edi], al
+	mov edi, [ss:bp+6]
 
-	inc bx
-	inc edi
+	move_loop:
+		mov al, byte [gs:bx]
+		mov byte [fs:edi], al
 
-	loop move_loop
+		inc bx
+		inc edi
 
-	ret
+		loop move_loop
+
+		pop gs
+
+		mov ax, [bp+2]   ;获取返回地址的位置 
+		mov [bp+8], ax   ;将返回地址放入第一个参数所在的地方
+		popa
+		pop bp
+		add sp, 6        ;弹出参数
+
+		ret
+
+
+
+load_file_fat12:
+; loader特别定制
+; 函数原型：void load_file_fat12(dword edi(bp+10), word tmp_address(bp+8), word filename(bp+6), word address(bp+4)) 
+; tmp_address用来暂存目录项和FAT表，最长会占用9*520字节，filename是要寻找的名字的地址，address是最后要存储的文件地址
+	push bp
+	mov bp, sp
+	pusha
+
+	push es  ;在后面使用了es寄存器，那么就要先保存
+
+	;我决定将此处的三个循环变量改造为局部变量，使用堆栈存储
+	push word 19   ;目录扇区序号   sp+4-------di+4
+	push word 0    ;扇区内目录项偏移    sp+2------di+2
+	push word 0    ;目录项内文件名字字母序号   sp----di
+
+	mov di, sp
+
+	search_dir:
+		cmp word [ss:di+4], 33    ;如果所有目录扇区已搜索完成，失败
+		jz find_fail           ;jz是当前述二者相等时会执行
+		
+		push word [ss:di+4] ;当前依旧是有效目录扇区，那么开始准备读入扇区
+		push word 0001h  ;扇区序号是[sp+4]，读入1个扇区
+		push word [ss:bp+8]  ;读入到0x1000:0000 即0x10000
+		call load_sector
+
+		inc word [ss:di+4]  ;下一个扇区序号是加一
+
+		mov word [ss:di+2], 0  ;准备开始在已经加载的扇区内搜索各个目录项
+	search_one_sector:
+		cmp word [ss:di+2], 520 ;目录项搜索完毕就失败，检查下一个扇区
+		jz search_dir        
+
+		mov si, [ss:bp+8]
+		mov es, si     ;将es寄存器设置为目录扇区在内存中的段地址
+		mov bx, [ss:di+2]  ;将当前目录项的起始偏移载入bx
+
+		add word [ss:di+2], 32  ;生成下一个目录项的偏移
+
+		mov word [ss:di], 0    ;生成要搜索的字母的偏移0
+
+		mov si, [ss:bp+6]  ;将目标文件名载入si
+
+	search_one_entry:
+		cmp word [ss:di], 11   ;比较当前搜索的字母的序号，如果等于11代表检查成功
+		jz find_file
+
+		inc word [ss:di]   ;字母序号加一
+		lodsb      ;从ds:si加载一个字节进入al，自增si
+		cmp al, byte [es:bx]   ;比较目标字母和当前字母是否一致
+		jz one_character_success  ;如果一致自增bx之后，开始比较下一个字母
+		jmp search_one_sector  ;不一致搜索下一个目录项
+
+	one_character_success: 
+		inc bx
+		jmp search_one_entry
+	find_file:
+		add sp, 6 ;弹出3个局部变量
+
+		; pop es
+
+		add bx, 15 ;检查文件名成功之后，bx加15就是这个目录项中存储首簇序号的位置
+		mov ax, [es:bx]  ;将首簇序号加载进入ax寄存器
+
+		pop es
+
+		jmp load_fat
+
+	find_fail:
+		add sp, 6 ;弹出3个局部变量
+
+		pop es
+
+		jmp $
+
+
+	load_fat:
+		push word 1
+		push word 9
+		push word [ss:bp+8]
+		call load_sector  ;加载所有FAT表
+
+		push es
+
+		
+		mov si, [ss:bp+4]  ;保存loader加载到的地址
+
+		mov bx, [ss:bp+8]  ;在es内存入1000h，用来和bx配合获取FAT项
+		mov es, bx
+
+	parse_fat:
+		push ax   ;保存首簇序号到堆栈
+
+		cmp ax, 0fffh
+		jz file_load_done
+
+		add ax, 31
+		push ax
+		push 1
+		push si
+		call load_sector ;读取一个loader扇区
+
+		mov edi, [ss:bp+10]
+		push edi
+		push si
+		call move_sector
+
+		add edi, 200h
+		mov [ss:bp+10], edi
+
+		pop ax    ;恢复首簇地址，并重新压入
+		push ax
+
+		mov cl, 2
+		div cl
+
+		mov cl, 3
+		mul cl	
+
+		mov bx, ax
+		mov al, [es:bx]
+		mov ah, 0
+
+		inc bx
+		mov ch, [es:bx]
+		and ch, 0fh
+		mov cl, 0
+		add ax, cx
+
+		mov cl, [es:bx]
+		mov ch, 0
+		shr cx, 4
+
+		inc bx
+		mov dl, [es:bx]
+		mov dh, 0
+		shl dx, 4
+		add cx, dx
+
+		mov bx, ax
+
+		pop ax
+		; push ax   此处不需要再次push ax
+		mov dl, 2
+		div dl
+		cmp ah, 0
+		jz get_even_fat
+		jmp get_odd_fat
+
+	get_even_fat:
+		mov ax, bx
+		jmp parse_fat
+
+	get_odd_fat:
+		mov ax, cx
+		jmp parse_fat
+
+
+	file_load_done:
+		pop ax   ;弹出首簇序号
+
+		pop es
+
+		mov ax, [ss:bp+2]   ;获取返回地址的位置 
+		mov [ss:bp+12], ax  ;将返回地址放入第一个参数所在的地方
+		popa
+		pop bp
+		add sp, 10        ;弹出参数
+
+		ret
 
 
 load_kernel_success:
