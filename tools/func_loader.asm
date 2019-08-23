@@ -1,172 +1,55 @@
-org 0x7c00
-
-jmp start
-nop
-BS_OEMName	db	'StanBoot'
-BPB_BytesPerSec	dw	512
-BPB_SecPerClus	db	1
-BPB_RsvdSecCnt	dw	1
-BPB_NumFATs	db	2
-BPB_RootEntCnt	dw	224
-BPB_TotSec16	dw	2880
-BPB_Media	db	0xf0
-BPB_FATSz16	dw	9
-BPB_SecPerTrk	dw	18
-BPB_NumHeads	dw	2
-BPB_HiddSec	dd	0
-BPB_TotSec32	dd	0
-BS_DrvNum	db	0
-BS_Reserved1	db	0
-BS_BootSig	db	0x29
-BS_VolID	dd	0
-BS_VolLab	db	'boot loader'
-BS_FileSysType	db	'FAT12   '
-
-start :
-	
-	mov ax, cs
-	mov ds, ax
-	mov es, ax
-	mov ss, ax
-	mov sp, 0x7c00
-	; 设置堆栈的位置
-
-	; push 0000h
-	; push 0f0fh
-	; push 4000h
-	; call clean_screen
-
-	; jmp $
-	
-
-	push 0204h
-	push word [len]
-	push mess
-	push 0003h
-	call print
-	; jmp $
-
-
-	xor ah, ah
-	xor dl, dl
-	int 13h
-	; 重置磁盘驱动器
-
-	push 1000h
-	push file_name
-	push 1140h
-	call load_file_fat12
-
-	jmp 0x1140:0x00	
-
-
-; clean_screen:
-; ; 函数原型：void clean_screen(word 左上(bp+8), word 右下(bp+6), word 颜色(bp+4))
-; 	push bp
-; 	mov bp, sp
-; 	pusha
-
-
-; 	mov ax, 0600h
-
-; 	mov bx, [ss:bp+4]   ;第三个参数
-; 	mov dx, [ss:bp+6]   ;第二个参数
-; 	mov cx, [ss:bp+8]   ;第一个参数
-
-; 	int 10h
-
-; 	mov ax, [ss:bp+2]   ;获取返回地址的位置 
-; 	mov [ss:bp+8], ax   ;将返回地址放入第一个参数所在的地方
-
-; 	popa
-; 	pop bp
-; 	add sp, 6        ;弹出参数
-
-; 	ret
-
-print: 
-; 函数原型: void print(word 光标位置(bp+10), word 字符串长度(bp+8), word 字符串地址(bp+6), word 文字颜色(bp+4))
+move_sector:
+	; loader特别定制,  void move_sector(dword edi[bp+6], word gs[bp+4])
+	; 其中的edi代表转存的目的地，这里是一个偏移，gs代表转存的源，这里是一个段地址
 	push bp
 	mov bp, sp
 	pusha
 
-	mov ax, 1301h   ;输出
-	mov dx, [ss:bp+10]
-	mov cx, [ss:bp+8]
+	push gs
 
-	push es        ;如果在函数内部修改了段寄存器，必须要注意保存和恢复，popa，pusha与段寄存器无关
-
-	mov bx, ds
-	mov es, bx
-	mov bx, [ss:bp+4]
-	mov bh, 00h
-	push bp
-	mov bp, [ss:bp+6]
-	int 10h
-	pop bp
-
-	pop es
-
-	mov ax, [ss:bp+2]   ;获取返回地址的位置 
-	mov [ss:bp+10], ax  ;将返回地址放入第一个参数所在的地方
-	popa
-	pop bp
-	add sp, 8        ;弹出参数
-
-	ret
-
-load_sector:
-; 函数原型：void load_sector(word sector_index(bp+8), word sector_num(bp+6), word address(bp+4))
-	push bp
-	mov bp, sp
-	pusha
-
-	mov ax, [ss:bp+8]
-	mov cx, [ss:bp+6]
-	mov si, [ss:bp+4]
-	mov bl, 18
-	div bl
-	mov dh, al
-	and dh, 1
-	shr al, 1
-	
-	mov ch, al
-	inc ah
-	mov al, cl
-	mov cl, ah
-	
-	push es
-
-	read:
-	mov ah, 02h
-	mov bx, si
-	mov es, bx
+	mov cx, [ss:bp+4]
+	mov gs, cx
+	mov cx, 200h   ;需要连续转存512字节
 	mov bx, 0
-	mov dl, 0
-	int 13h
-	jc read
 
-	pop es
+	mov edi, [ss:bp+6]
 
-	mov ax, [ss:bp+2]   ;获取返回地址的位置 
-	mov [ss:bp+8], ax  ;将返回地址放入第一个参数所在的地方
-	popa
-	pop bp
-	add sp, 6        ;弹出参数
+	move_loop:
+		mov al, byte [gs:bx]
+		mov byte [fs:edi], al
 
-	ret
+		inc bx
+		inc edi
+
+		loop move_loop
+
+		pop gs
+
+		mov ax, [bp+2]   ;获取返回地址的位置 
+		mov [bp+8], ax   ;将返回地址放入第一个参数所在的地方
+		popa
+		pop bp
+		add sp, 6        ;弹出参数
+
+		ret
+
 
 
 load_file_fat12:
-; 函数原型：void load_file_fat12(word tmp_address(bp+8), word filename(bp+6), word address(bp+4)) 
-; tmp_address用来暂存目录项和FAT表，最长会占用9*520字节，filename是要寻找的名字的地址，address是最后要存储的文件地址
+; loader特别定制
+; 函数原型：void load_file_fat12(dword edi(bp+10), word tmp_address(bp+8), word filename(bp+6), word address(bp+4)) 
+; tmp_address用来暂存目录项和FAT表，最长会占用9*520字节，filename是要寻找的名字的地址，address是暂时存储文件地址，最多使用512字节
+; edi代表文件的最终目的地的偏移，而前述address代表的是暂存地址的段地址
 	push bp
 	mov bp, sp
 	pusha
 
-	push es
+	; 从此处开始，算是开始执行在目录中搜索文件的任务，此处应该是和其余部分完全隔离，除了约定了一个将找到的文件
+	; 的首簇序号放入ax寄存器之外，没有其他任何特别约定
+	push es  ;在后面使用了es寄存器，那么就要先保存
 
 	;我决定将此处的三个循环变量改造为局部变量，使用堆栈存储
+
 	push word 19   ;目录扇区序号   sp+4-------di+4
 	push word 0    ;扇区内目录项偏移    sp+2------di+2
 	push word 0    ;目录项内文件名字字母序号   sp----di
@@ -189,7 +72,7 @@ load_file_fat12:
 		cmp word [ss:di+2], 520 ;目录项搜索完毕就失败，检查下一个扇区
 		jz search_dir        
 
-		mov si, 1000h
+		mov si, [ss:bp+8]
 		mov es, si     ;将es寄存器设置为目录扇区在内存中的段地址
 		mov bx, [ss:di+2]  ;将当前目录项的起始偏移载入bx
 
@@ -197,9 +80,6 @@ load_file_fat12:
 
 		mov word [ss:di], 0    ;生成要搜索的字母的偏移0
 
-
-		mov si, 0        
-		mov ds, si     ;设置ds为0，这是为了后面loadsb
 		mov si, [ss:bp+6]  ;将目标文件名载入si
 
 	search_one_entry:
@@ -215,8 +95,12 @@ load_file_fat12:
 	one_character_success: 
 		inc bx
 		jmp search_one_entry
+
+
 	find_file:
 		add sp, 6 ;弹出3个局部变量
+
+		; pop es
 
 		add bx, 15 ;检查文件名成功之后，bx加15就是这个目录项中存储首簇序号的位置
 		mov ax, [es:bx]  ;将首簇序号加载进入ax寄存器
@@ -231,13 +115,18 @@ load_file_fat12:
 		pop es
 
 		jmp $
+	;find_file和find_fail都是目录区搜索结束，成功的话就会把首簇序号放入ax寄存器
+	;除此之外，需要把局部变量，es寄存器等恢复或者弹出，保证不影响
 
 
 	load_fat:
+	; 加载所有FAT表
 		push word 1
 		push word 9
 		push word [ss:bp+8]
 		call load_sector  ;加载所有FAT表
+
+		push es
 
 		
 		mov si, [ss:bp+4]  ;保存loader加载到的地址
@@ -245,6 +134,7 @@ load_file_fat12:
 		mov bx, [ss:bp+8]  ;在es内存入1000h，用来和bx配合获取FAT项
 		mov es, bx
 
+	;循环执行fat解析任务
 	parse_fat:
 		push ax   ;保存首簇序号到堆栈
 
@@ -256,7 +146,14 @@ load_file_fat12:
 		push 1
 		push si
 		call load_sector ;读取一个loader扇区
-		add si, 20h  ;下一个扇区si加20h即 200h->520B
+
+		mov edi, [ss:bp+10]
+		push edi
+		push si
+		call move_sector
+
+		add edi, 200h
+		mov [ss:bp+10], edi
 
 		pop ax    ;恢复首簇地址，并重新压入
 		push ax
@@ -290,7 +187,7 @@ load_file_fat12:
 		mov bx, ax
 
 		pop ax
-		; push ax
+		; push ax   此处不需要再次push ax
 		mov dl, 2
 		div dl
 		cmp ah, 0
@@ -309,19 +206,12 @@ load_file_fat12:
 	file_load_done:
 		pop ax   ;弹出首簇序号
 
+		pop es
+
 		mov ax, [ss:bp+2]   ;获取返回地址的位置 
-		mov [ss:bp+8], ax  ;将返回地址放入第一个参数所在的地方
+		mov [ss:bp+12], ax  ;将返回地址放入第一个参数所在的地方
 		popa
 		pop bp
-		add sp, 6        ;弹出参数
+		add sp, 10        ;弹出参数
 
 		ret
-
-
-mess: db "hello, stan!"
-len: dw $-mess
-
-file_name: db "LOADER  BIN", 0
-
-times 510-($-$$) db 0
-dw 0xaa55	

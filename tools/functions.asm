@@ -1,88 +1,26 @@
-org 0x7c00
-
-jmp start
-nop
-BS_OEMName	db	'StanBoot'
-BPB_BytesPerSec	dw	512
-BPB_SecPerClus	db	1
-BPB_RsvdSecCnt	dw	1
-BPB_NumFATs	db	2
-BPB_RootEntCnt	dw	224
-BPB_TotSec16	dw	2880
-BPB_Media	db	0xf0
-BPB_FATSz16	dw	9
-BPB_SecPerTrk	dw	18
-BPB_NumHeads	dw	2
-BPB_HiddSec	dd	0
-BPB_TotSec32	dd	0
-BS_DrvNum	db	0
-BS_Reserved1	db	0
-BS_BootSig	db	0x29
-BS_VolID	dd	0
-BS_VolLab	db	'boot loader'
-BS_FileSysType	db	'FAT12   '
-
-start :
-	
-	mov ax, cs
-	mov ds, ax
-	mov es, ax
-	mov ss, ax
-	mov sp, 0x7c00
-	; 设置堆栈的位置
-
-	; push 0000h
-	; push 0f0fh
-	; push 4000h
-	; call clean_screen
-
-	; jmp $
-	
-
-	push 0204h
-	push word [len]
-	push mess
-	push 0003h
-	call print
-	; jmp $
+clean_screen:
+; 函数原型：void clean_screen(word 左上(bp+8), word 右下(bp+6), word 颜色(bp+4))
+	push bp
+	mov bp, sp
+	pusha
 
 
-	xor ah, ah
-	xor dl, dl
-	int 13h
-	; 重置磁盘驱动器
+	mov ax, 0600h
 
-	push 1000h
-	push file_name
-	push 1140h
-	call load_file_fat12
+	mov bx, [ss:bp+4]   ;第三个参数
+	mov dx, [ss:bp+6]   ;第二个参数
+	mov cx, [ss:bp+8]   ;第一个参数
 
-	jmp 0x1140:0x00	
+	int 10h
 
+	mov ax, [ss:bp+2]   ;获取返回地址的位置 
+	mov [ss:bp+8], ax   ;将返回地址放入第一个参数所在的地方
 
-; clean_screen:
-; ; 函数原型：void clean_screen(word 左上(bp+8), word 右下(bp+6), word 颜色(bp+4))
-; 	push bp
-; 	mov bp, sp
-; 	pusha
+	popa
+	pop bp
+	add sp, 6        ;弹出参数
 
-
-; 	mov ax, 0600h
-
-; 	mov bx, [ss:bp+4]   ;第三个参数
-; 	mov dx, [ss:bp+6]   ;第二个参数
-; 	mov cx, [ss:bp+8]   ;第一个参数
-
-; 	int 10h
-
-; 	mov ax, [ss:bp+2]   ;获取返回地址的位置 
-; 	mov [ss:bp+8], ax   ;将返回地址放入第一个参数所在的地方
-
-; 	popa
-; 	pop bp
-; 	add sp, 6        ;弹出参数
-
-; 	ret
+	ret
 
 print: 
 ; 函数原型: void print(word 光标位置(bp+10), word 字符串长度(bp+8), word 字符串地址(bp+6), word 文字颜色(bp+4))
@@ -316,12 +254,3 @@ load_file_fat12:
 		add sp, 6        ;弹出参数
 
 		ret
-
-
-mess: db "hello, stan!"
-len: dw $-mess
-
-file_name: db "LOADER  BIN", 0
-
-times 510-($-$$) db 0
-dw 0xaa55	
