@@ -51,7 +51,7 @@ push 1000h
 push file_name
 push 0x7c0
 call load_file_fat12
-call load_kernel_success
+
 jmp kill_motor
 
 
@@ -362,24 +362,6 @@ load_file_fat12:
 		ret
 
 
-load_kernel_success:
-	mov ax, 1301h
-	mov dx, 0200h
-	mov cx, [len_mess2]
-	mov bx, 1140h
-	mov es, bx
-	mov bp, mess2
-	mov bx, 0002h
-	int 10h	
-
-	mov ax, 0b800h
-	mov gs, ax
-	mov ah, 0fh
-	mov al, 'S'
-	mov [gs:((80+39)*2)], ax
-
-	ret
-
 
 kill_motor:
 	mov dx, 03f2h
@@ -544,15 +526,26 @@ get_in_protect:
 	mov esp, 7e00h
 
 	mov	dword	[0x90000],	0x91007
-	mov	dword	[0x90800],	0x91007		
+	; PML4E  内存位置基址都是0, 位置是90000, PDPT的基址是91000
+	; A=0 PCD=0 PWT=0 U/S=1 R/W=1 1
+	mov	dword	[0x90800],	0x91007	; PML4E	
 
 	mov	dword	[0x91000],	0x92007
+	; PDPTE 位置91000  PDT的基址是92000 
+	; A=0 PCD=0 PWT=0 U/S=1 R/W=1 1  
+	; 0000 0000 0111 
 
 	mov	dword	[0x92000],	0x000083
+	; PDE 位置 92000 
+	; 0000 1000 0011 2MB内存页 基址0
 
 	mov	dword	[0x92008],	0x200083
+	; PDE 位置 92000 
+	; 0000 1000 0011 2MB内存页 基址2M
 
 	mov	dword	[0x92010],	0x400083
+	; PDE 位置 92000 
+	; 0000 1000 0011 2MB内存页 基址4M
 
 	mov	dword	[0x92018],	0x600083
 
@@ -651,7 +644,18 @@ section gdt32
 
 first_gdt:		dd	0,0
 code_gdt:	dd	0x0000FFFF,0x00CF9A00
+; 按照从高位到低位依次是： 00CF 9A00  0000 FFFF 
+; 所以基址是0000 0000 段长是F FFFF  TYPE是A，P/DPL/S是9  G/DB/L/AVL是C
+; S=1 代码段/数据段  DPL=0 最高特权级 P=1 已在内存
+; TYPE=1010  代码段 非一致性 可读 未访问
+; G=1 4K粒度 D/B=0 L=1 AVL=0 
 data_gdt:	dd	0x0000FFFF,0x00CF9200
+; 按照从高位到低位依次是： 00CF 9A00  0000 FFFF 
+; 所以基址是0000 0000 段长是F FFFF  TYPE是A，P/DPL/S是9  G/DB/L/AVL是C
+; S=1 代码段/数据段  DPL=0 最高特权级 P=1 已在内存
+; TYPE=0010  数据段 非一致性 可读 未访问
+; G=1 4K粒度 D/B=0 L=1 AVL=0
+
 
 gdtlen	equ	$ - first_gdt
 gdtptr	dw	gdtlen - 1
@@ -665,7 +669,15 @@ section gdt64
 
 first_gdt64: dq	0x0000000000000000
 code_gdt64:	 dq	0xff2098ffffff0000
+; 所以基址是FFFF FFFF 段长是0 0000 忽略 TYPE是8，P/DPL/S是9  G/DB/L/AVL是2
+; S=1 代码段/数据段  DPL=0 最高特权级 P=1 已在内存
+; TYPE=1000  代码段 非一致性 不可读 未访问
+; G=0 忽略 D/B=0 L=1 64位模式 AVL=0 忽略
 data_gdt64:	 dq	0xff0092ffffff0000
+; 所以基址是FFFF FFFF 段长是0 0000 忽略  TYPE是2，P/DPL/S是9  G/DB/L/AVL是0
+; S=1 代码段/数据段  DPL=0 最高特权级 P=1 已在内存
+; TYPE=0010  数据段 向上扩展 可读写 未访问
+; G=0 忽略 D/B=0 L=0 忽略 AVL=0 忽略
 
 gdtlen64	equ	$ - first_gdt64
 gdtptr64	dw	gdtlen64 - 1
