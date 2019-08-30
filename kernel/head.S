@@ -25,25 +25,32 @@ _start:
 	mov	%ax,	%fs
 	mov	%ax,	%ss
 	mov	$0x7E00,	%esp
+	# 设置段寄存器和堆栈，段位64bit数据段
+	# 段选择子的高13bit是段索引，所以是2
+	# 堆栈基址0x7E00
 
-//=======	load GDTR
+#	load GDTR
 
 	lgdt	GDT_POINTER(%rip)
+	# 实际表达的意思就是GDT_POINTER，但是不能这样写，否则会报错
 
-//=======	load	IDTR
+#	load	IDTR
 
 	lidt	IDT_POINTER(%rip)
 
 	mov	$0x10,	%ax
 	mov	%ax,	%ds
 	mov	%ax,	%es
-	mov	%ax,	%fs
+	mov	%ax,	%fss
 	mov	%ax,	%gs
 	mov	%ax,	%ss
 
 	movq	$0x7E00,	%rsp
+	# 设置段寄存器和堆栈，段位64bit数据段
+	# 堆栈基址0x7E00
 
-//=======	load	cr3
+
+#	load	cr3
 
 	movq	$0x101000,	%rax
 	movq	%rax,		%cr3
@@ -52,7 +59,7 @@ _start:
 	pushq	%rax
 	lretq
 
-//=======	64-bit mode code
+#	64-bit mode code
 
 switch_seg:
 	.quad	entry64
@@ -73,7 +80,7 @@ entry64:
 go_to_kernel:
 	.quad	Start_Kernel
 
-//=======	init page
+#	init page
 .align 8
 
 .org	0x1000
@@ -96,12 +103,16 @@ __PDPTE:
 
 __PDE:
 
-	.quad	0x000083	
+	.quad	0x000083
+	# 页基址0	
 	.quad	0x200083
+	# 页基址2M
 	.quad	0x400083
 	.quad	0x600083
 	.quad	0x800083
+
 	.quad	0xe0000083		/*0x a00000*/
+	# 页基址0xe000 0000
 	.quad	0xe0200083
 	.quad	0xe0400083
 	.quad	0xe0600083
@@ -111,7 +122,15 @@ __PDE:
 	.quad	0xe0e00083
 	.fill	499,8,0
 
-//=======	GDT_Table
+#	GDT_Table
+# 此处定义了两个PML4E表项，分别是Canonical地址首尾两段的第一个表项，
+# 他们都被映射到了相同的物理地址范围。
+
+# PDPTE只有一个，定义了13个2M物理页，一共26M，其中前10M处于物理空间的开头，
+# 后16M自物理基址0xe000 0000开始连续16M内。
+
+# 它们对应的线性地址范围为0到 0x19F FFFF以及0xFFFF 8000 0000 0000到0xFFFF 8000 019F FFFF
+
 
 .section .data
 
@@ -132,7 +151,7 @@ GDT_POINTER:
 GDT_LIMIT:	.word	GDT_END - GDT_Table - 1
 GDT_BASE:	.quad	GDT_Table
 
-//=======	IDT_Table
+#	IDT_Table
 
 .globl IDT_Table
 
@@ -144,7 +163,7 @@ IDT_POINTER:
 IDT_LIMIT:	.word	IDT_END - IDT_Table - 1
 IDT_BASE:	.quad	IDT_Table
 
-//=======	TSS64_Table
+#	TSS64_Table
 
 .globl	TSS64_Table
 
