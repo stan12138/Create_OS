@@ -1233,3 +1233,239 @@ TSS描述符所描述的TSS表长度一共是104B，其中包含了26个表项�
 
 加载TR寄存器使用指令`ltr`
 
+本质上，我认为以上资料配合书里面的说明和代码，就能写出简易版的异常处理，这时的异常处理针对所有的异常都做相同的处理，输出特定的文字。
+
+但是，这里面有一个问题。此时代码会调用在kernel里面写的c代码输出函数，于是这里就涉及到了函数调用约定。
+
+### 函数调用约定
+
+根据已有资料，在使用GNU编译器的情况下，32位代码，使用堆栈传递参数，在64位代码中首先使用寄存器传参，整数参数包括指针被依次放入`rdi, rsi, rdx, rcx, r8, r9`，剩余的参数应该是放在堆栈中的，浮点参数会使用`xmm0~xmm7`等寄存器传递。
+
+但是，但是并不是所有情况如此。前面已经说了，我在windows平台使用GNU工具进行编译，这种情况下，传参的方式并不符合前述方式。我也很无奈，虽然不太相信，但是在测试中这是事实。
+
+所以，该如何解决这个问题？
+
+只有测试，
+
+从测试和反编译中找出传参的方式，这里根据我的测试结果，可以直接写一个简单的cpp文件，里面写个简单的函数，例如`test.cpp`，然后使用`g++ -c test.cpp`获得`test.o`文件，然后使用`objdump -D test.o > s.lst`将结果反汇编到`s.lst`中，对比c++文件和汇编就可以知道传参的方式(虽然内核用的是c，这里用了c++测试，但是其实都一样，不放心的话用c也行).
+
+如果还是不放心，可以直接在内核中c文件中写个简单函数，然后对`system`进行反汇编。结果都一样。
+
+这里我写了下面这样一个简单的`c++`文件，如下：
+
+~~~c++
+#include <iostream>
+
+using namespace std;
+
+
+
+int test(int a, int b, int c, int d)
+{
+	int s=0;
+	s = s+a;
+	s = s+a;
+	s = s+a;
+	return s;
+}
+
+
+int main()
+{
+	int a = 10, b=20, c=30, d=40;
+	test(a, b, c, d);
+
+	return 0;
+}
+~~~
+
+然后通过上述过程得到反汇编的结果部分结果如下：
+
+~~~assembly
+test.o:     file format pe-x86-64
+
+
+Disassembly of section .text:
+
+0000000000000000 <_Z4testiiii>:
+   0:	55                   	push   %rbp
+   1:	48 89 e5             	mov    %rsp,%rbp
+   4:	48 83 ec 10          	sub    $0x10,%rsp
+   8:	89 4d 10             	mov    %ecx,0x10(%rbp)
+   b:	89 55 18             	mov    %edx,0x18(%rbp)
+   e:	44 89 45 20          	mov    %r8d,0x20(%rbp)
+  12:	44 89 4d 28          	mov    %r9d,0x28(%rbp)
+  16:	c7 45 fc 00 00 00 00 	movl   $0x0,-0x4(%rbp)
+  1d:	8b 45 10             	mov    0x10(%rbp),%eax
+  20:	01 45 fc             	add    %eax,-0x4(%rbp)
+  23:	8b 45 10             	mov    0x10(%rbp),%eax
+  26:	01 45 fc             	add    %eax,-0x4(%rbp)
+  29:	8b 45 10             	mov    0x10(%rbp),%eax
+  2c:	01 45 fc             	add    %eax,-0x4(%rbp)
+  2f:	8b 45 fc             	mov    -0x4(%rbp),%eax
+  32:	48 83 c4 10          	add    $0x10,%rsp
+  36:	5d                   	pop    %rbp
+  37:	c3                   	retq   
+
+0000000000000038 <main>:
+  38:	55                   	push   %rbp
+  39:	48 89 e5             	mov    %rsp,%rbp
+  3c:	48 83 ec 30          	sub    $0x30,%rsp
+  40:	e8 00 00 00 00       	callq  45 <main+0xd>
+  45:	c7 45 fc 0a 00 00 00 	movl   $0xa,-0x4(%rbp)
+  4c:	c7 45 f8 14 00 00 00 	movl   $0x14,-0x8(%rbp)
+  53:	c7 45 f4 1e 00 00 00 	movl   $0x1e,-0xc(%rbp)
+  5a:	c7 45 f0 28 00 00 00 	movl   $0x28,-0x10(%rbp)
+  61:	44 8b 45 f0          	mov    -0x10(%rbp),%r8d
+  65:	8b 4d f4             	mov    -0xc(%rbp),%ecx
+  68:	8b 55 f8             	mov    -0x8(%rbp),%edx
+  6b:	8b 45 fc             	mov    -0x4(%rbp),%eax
+  6e:	45 89 c1             	mov    %r8d,%r9d
+  71:	41 89 c8             	mov    %ecx,%r8d
+  74:	89 c1                	mov    %eax,%ecx
+  76:	e8 85 ff ff ff       	callq  0 <_Z4testiiii>
+  7b:	b8 00 00 00 00       	mov    $0x0,%eax
+  80:	48 83 c4 30          	add    $0x30,%rsp
+  84:	5d                   	pop    %rbp
+  85:	c3                   	retq  
+~~~
+
+从代码中，可以明显看出，test函数对应的汇编函数是`_Z4testiiii`，然后仔细读一读，应该是可以推断出来`rcx, rdx, r8, r9`这四个寄存器用来传参了，其实这个也就是参数的顺序，即从第一个参数开始，依次存入`rcx, rdx, r8, r9`后续的需要多写点参数就能测出来，返回值也可以明显看出来:`eax`，关于上面参数顺序不确定的话，可以用逐步调试的方式，观察寄存器的值，然后在函数里面写一个不同位置参数不同处理方式的操作，就能确认出来，在写OS的时候，直接使用bochs调试就能发现，很简单。
+
+至此，这个传参问题算是解决了，也给出了再碰到的情况下如何处理的说明。我已经在内核部分做了测试(当然还不完善，例如对于不定参数，是否还需要用eax给出浮点参数个数等，但是大概现在已经算够用了吧)。
+
+
+
+
+
+### GNU C内嵌汇编
+
+这一块其实还是蛮有意思的。
+
+主要参考资料：主要是`professional assembly language`即汇编语言程序设计这本书
+
+#### 简单内嵌汇编
+
+可以直接使用`asm("assembly code");`这样的格式来写简单的内嵌汇编，并且可以直接访问全局变量，但是也仅限于全局变量，如下：
+
+~~~c
+#include<stdio.h>
+
+int a, b, c;
+
+int main()
+{
+    a=b=10;
+    c = 2;
+    __asm__ (
+                "movl a, %eax\n\t"
+                "movl b, %ebx\n\t"
+                "addl %eax, %ebx\n\t"
+                "movl %ebx, c"
+            );
+
+    printf("%d\n", c);
+}
+
+~~~
+
+Ps.看了书就知道`__asm__`和`asm`是一样的，但是`asm`可能会被用于其他用途，所以最好用前者。注意书上有提过访问寄存器应该额外再加一个`%`，但是那是针对内嵌汇编扩展的，而不是这里，这里不用也不能这样做。
+
+另外一点需要特别注意的是，上面的例子只是一个非常非常简化的例子，有很多缺陷，例如我们使用了寄存器，却没有对现场进行保护和恢复。
+
+所以正确的做法应该是这样的：
+
+~~~c
+#include<stdio.h>
+int a, b, c;
+
+int main()
+{
+
+    a=b=10;
+    c = 2;
+    __asm__ (
+                "pushq %rax\n\t"
+                "pushq %rbx\n\t"
+                "movl a, %eax\n\t"
+                "movl b, %ebx\n\t"
+                "addl %eax, %ebx\n\t"
+                "movl %ebx, c\n\t"
+                "popq %rbx\n\t"
+                "popq %rax\n\t"
+            );
+    printf("%d\n", c);
+}
+~~~
+
+然后，还会更加复杂，从汇编代码就可以看出来，我们用的是64位环境，x86-64汇编。因此需要注意的是在64位汇编里，我记得是没有`pusha,popa`这样的指令的，另外，我们也不能`pushl %eax`这样，而必须将完整的`%rax`寄存器保存，否则就会报错。
+
+
+
+更高级的叫做扩展汇编，这种形式的汇编代码具有更加强的功能。
+
+
+
+#### 扩展汇编
+
+首先直接给出一个可以运行的这种代码：
+
+~~~c
+#include<stdio.h>
+
+
+int main()
+{
+    int a, b, c;
+    a=b=10;
+    c = 2;
+
+    __asm__ (
+                "movl $0, %%eax\n\t"
+                "addl %%eax, %%ecx\n\t"
+                "addl %%ecx, %%eax\n\t"
+                :"=a"(c)
+                :"b"(a),"c"(b)
+        );
+
+    printf("%d\n", c);
+}
+~~~
+
+
+
+扩展汇编格式为:
+
+~~~c
+asm ("assembly code" : output locations : input operands : changed registers)
+~~~
+
+输出包含了汇编的输出值的寄存器和内存位置列表，输入操作数包含输入寄存器和内存位置的列表，修改寄存器是过程中被修改的未在前两个列表的寄存器的列表。某一部分缺失了可以直接忽略，但冒号必须留下，最后一部分缺失的话，可以直接省略掉最后一个冒号。
+
+##### 输入输出值指定
+
+输入输出值列表的格式为：
+
+`"constraint" (variable)`，其中的`variable`就是程序中的c变量，扩展汇编中可以使用全局变量也可以使用局部变量。
+
+对于输入值列表来说，`constraint`代表我们想把输入变量放在哪。对于输出列表自然就是我们想把输出值放哪。
+
+`constraint`只用一个字符，列表如下：
+
+
+
+这个表只供简单参考，毕竟它写的很多是针对x86的，而我们这里重点关注x86-64，所以例如`a`应该说代表a寄存器，如果有必要的话，还是推荐看一下GNU的手册，总的目录[在这里](https://gcc.gnu.org/onlinedocs/gcc-6.4.0/gcc/Using-Assembly-Language-with-C.html)，其中关于限定的，由于这些是针对不同平台不一样的，所以[在这里](https://gcc.gnu.org/onlinedocs/gcc-6.4.0/gcc/Machine-Constraints.html#Machine-Constraints)，注意要去看`x86 family`哦，不要去看`IA-64`，已经说过很多次了`IA-64`不是`x86-64`
+
+输出值还包含一个约束修饰符，种类如下：
+
+
+
+它指示编译器怎样处理输出值。
+
+~~~c
+asm ("assembly code" : "=a"(result) : "d"(data1), "c"(data2))
+~~~
+
+这里的意思是，使用data1和data2两个变量，分别放入d,c寄存器，结果在a寄存器，把结果放进result变量
+
+接下来还有不少高级内容。
