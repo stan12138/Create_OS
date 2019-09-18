@@ -1,12 +1,11 @@
-#include "show.h"
 #include "lib.h"
 #include "font.h"
 #include <stdarg.h>
 
-#define one_character 8
-#define one_line 12000
 
-unsigned char color_table[10][3] = {
+static Info screen = {SCREEN_WIDTH, SCREEN_HEIGHT, PIXEL_SIZE, (int *)MEM_LOC};  //屏幕相关信息
+
+static unsigned char color_table[10][3] = {
 	{0, 0, 0},
 	{255, 255, 255},
 	{255, 0, 0},
@@ -19,10 +18,11 @@ unsigned char color_table[10][3] = {
 	{128, 128, 128}
 };
 
-char character_buffer[4096] = {0};                              //要显示的字符内容的缓冲区
-struct Info screen = {800, 600, 4, (int *)0xffff800000a00000};  //屏幕相关信息
-int *char_position = (int *)0xffff800000a00000;                 //记录当前光标的位置
-int num_in_one_line = 0;                                        //记录当前行已经占用的字符数目
+
+static char character_buffer[BUFFER_SIZE] = {0};                              //要显示的字符内容的缓冲区
+
+static int *char_position = (int *)MEM_LOC;                 //记录当前光标的位置
+static int num_in_one_line = 0;                                        //记录当前行已经占用的字符数目
 
 
 void pixel(int x, int y, char r, char g, char b)                //将对应坐标位置的像素显示为指定颜色
@@ -35,7 +35,7 @@ void pixel(int x, int y, char r, char g, char b)                //将对应坐�
 	*((char *)addr+3) = (char)0x00;
 }
 
-void pixel_ptr(int *position, unsigned char r, unsigned char g, unsigned char b)          //设置像素的颜色，像素坐标使用内存地址表示
+static void pixel_ptr(int *position, unsigned char r, unsigned char g, unsigned char b)          //设置像素的颜色，像素坐标使用内存地址表示
 {
 	*((char *)position+0) = b;
 	*((char *)position+1) = g;
@@ -43,7 +43,7 @@ void pixel_ptr(int *position, unsigned char r, unsigned char g, unsigned char b)
 	*((char *)position+3) = (char)0x00;
 }
 
-void print_char(int *position, char character, Color character_color, Color back_color)                //显示一个字符， position指定字符最左上角的像素的内存地址
+static void print_char(int *position, char character, Color character_color, Color back_color)                //显示一个字符， position指定字符最左上角的像素的内存地址
 {
 	for(int i=0; i<16; i++)
 	{
@@ -57,7 +57,7 @@ void print_char(int *position, char character, Color character_color, Color back
 }
 
 
-char *int2str(int num)  //将整数转换为字符串，并返回
+static char *int2str(int num)  //将整数转换为字符串，并返回
 {
 	char record[32] = {0};
 	static char res[32] = {0};
@@ -91,7 +91,7 @@ char *int2str(int num)  //将整数转换为字符串，并返回
 	return res;
 }
 
-void format(char *template, char *buffer, va_list var_list)   //将字符串格式化，需要给定原始模板，完成之后存储的缓存区，以及以不定参数给出的填充内容
+static void format(char *template, char *buffer, va_list var_list)   //将字符串格式化，需要给定原始模板，完成之后存储的缓存区，以及以不定参数给出的填充内容
 {                                                             //现在只支持最简单的%s, %d两种格式化方式，不能指定任何其余参数
 	while(*template != 0)
 	{

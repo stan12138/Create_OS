@@ -1,7 +1,4 @@
 #include "lib.h"
-#include "show.h"
-
-
 
 void Start_Kernel(void)
 {
